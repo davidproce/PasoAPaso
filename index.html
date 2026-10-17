@@ -40,7 +40,10 @@
   .empty{color:var(--mut);text-align:center;padding:40px 20px;line-height:1.5}
   footer{position:fixed;left:0;right:0;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding:8px 12px calc(env(safe-area-inset-bottom) + 8px);display:flex;gap:8px}
   footer button{flex:1;font-size:14px}
-  #msg{position:fixed;left:12px;right:12px;bottom:calc(env(safe-area-inset-bottom) + 70px);background:#3a3a3c;padding:10px 12px;border-radius:10px;display:none;z-index:9;text-align:center}
+  #msg{position:fixed;left:12px;right:12px;bottom:calc(env(safe-area-inset-bottom) + 70px);background:#3a3a3c;padding:12px 14px;border-radius:12px;display:none;z-index:9;text-align:center;white-space:pre-line;line-height:1.35;font-size:15px;box-shadow:0 4px 20px #000a}
+  #msg.err{background:#7a1f1a}
+  #msg.ok{background:#1e5c32}
+  #msg small{display:block;color:#ffffffaa;font-size:12px;margin-top:6px}
   #player{display:none;position:fixed;inset:0;background:#000;z-index:20;flex-direction:column}
   .phead{display:flex;gap:10px;align-items:center;justify-content:space-between;padding:calc(env(safe-area-inset-top) + 8px) 12px 8px}
   .phead span{flex:1;min-width:0;font-size:15px;word-break:break-word}
@@ -83,7 +86,7 @@ const open=()=>new Promise((ok,ko)=>{const r=indexedDB.open('baile',2);
   r.onupgradeneeded=()=>{const d=r.result;
     if(!d.objectStoreNames.contains('videos'))d.createObjectStore('videos',{keyPath:'id'});
     if(!d.objectStoreNames.contains('blobs'))d.createObjectStore('blobs');};
-  r.onblocked=()=>msg('Hay otra pestaña de esta app abierta. Ciérrala (o cierra todas las pestañas de la app) y recarga.',0);
+  r.onblocked=()=>msg('Hay otra pestaña de esta app abierta. Ciérrala (o cierra todas las pestañas de la app) y recarga.',0,'err');
   r.onsuccess=()=>{r.result.onversionchange=()=>{r.result.close();location.reload()};ok(r.result)};
   r.onerror=()=>ko(r.error)});
 const tx=(mode,store='videos')=>db.transaction(store,mode).objectStore(store);
@@ -110,8 +113,15 @@ function closePlayer(){
 
 /* ---------- UI ---------- */
 const $=s=>document.querySelector(s);
-function msg(t,ms=2500){const m=$('#msg');m.textContent=t;m.style.display='block';clearTimeout(msg.t);if(ms)msg.t=setTimeout(()=>m.style.display='none',ms)}
+function msg(t,ms=2500,kind=''){
+  const m=$('#msg');m.textContent=t;m.className=kind;m.style.display='block';
+  if(ms===0&&kind!==''&&kind!=='busy'){const s=document.createElement('small');s.textContent='(toca para cerrar)';m.appendChild(s)}
+  clearTimeout(msg.t);if(ms)msg.t=setTimeout(()=>m.style.display='none',ms)
+}
+function hideMsg(){clearTimeout(msg.t);$('#msg').style.display='none'}
+$('#msg').onclick=()=>{if(!busy)hideMsg()};
 const collator=new Intl.Collator('es',{numeric:true,sensitivity:'base'});
+const mb=x=>(x/1e6).toFixed(x>=1e7?0:1)+' MB';
 
 function render(){
   for(const [s] of STATES) $('#c-'+s).textContent=items.filter(i=>i.state===s).length;
@@ -167,32 +177,90 @@ function makeThumb(file){return new Promise(res=>{
 })}
 
 /* ---------- Añadir videos ---------- */
+let busy=false, waiting=false, waitTimer=null;
+
+function onBack(){
+  // Se dispara al volver del selector de fotos. Si aún no han llegado los archivos,
+  // es que iOS los está preparando.
+  if(!waiting||busy)return;
+  clearTimeout(waitTimer);
+  waitTimer=setTimeout(()=>{
+    if(waiting&&!busy)msg('⏳ iOS está preparando los videos…\nEspera: con videos grandes puede tardar 1-2 minutos.\nSi tarda mucho, la próxima vez elige menos videos por vez.',0,'busy');
+  },700);
+}
+window.addEventListener('focus',onBack);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)onBack()});
+
+$('#fv').addEventListener('cancel',()=>{waiting=false;clearTimeout(waitTimer);if(!busy)hideMsg()});
+
 $('#add').onclick=()=>{
-  if(!db){msg('El almacenamiento no está listo. Cierra otras pestañas de la app y recarga la página.',5000);return}
+  if(busy){msg('Ya se está guardando. Espera a que termine.',2500);return}
+  if(!db){msg('El almacenamiento no está listo. Cierra otras pestañas de la app y recarga la página.',0,'err');return}
+  waiting=true;
+  msg('Elige pocos videos por vez (2 o 3) y confirma arriba a la derecha.',0,'busy');
   $('#fv').click();
 };
+
 $('#fv').onchange=async e=>{
+  waiting=false;clearTimeout(waitTimer);
   const files=[...e.target.files];e.target.value='';
+  if(!files.length){hideMsg();return}
   const byId=new Map(items.map(i=>[i.id,i]));
   const todo=files.filter(f=>{const it=byId.get(f.name+'|'+f.size);return !it||!it.hasVideo});
-  let n=0,nuevos=0,rec=0;
-  try{
-    for(const f of todo){
-      msg(`Guardando ${++n}/${todo.length}…`,0);
-      const id=f.name+'|'+f.size;let it=byId.get(id);
+  const ya=files.length-todo.length;
+  if(!todo.length){msg(`Esos ${files.length} videos ya estaban guardados.`,3500);return}
+
+  const total=todo.reduce((s,f)=>s+f.size,0);
+  if(todo.length>6||total>800e6){
+    if(!confirm(`Has elegido ${todo.length} videos (${mb(total)}).\nEs mucho de una vez y podría fallar o quedarse colgado.\n\nRecomendado: 2 o 3 por vez.\n\n¿Continuar de todas formas?`)){hideMsg();return}
+  }
+
+  busy=true;
+  let lock=null;try{lock=await navigator.wakeLock.request('screen')}catch(_){}
+  let n=0,nuevos=0,rec=0,fallos=[],sinEspacio=false,fase='',t0=0,cur=null;
+
+  const pinta=()=>{
+    if(!cur)return;
+    const s=Math.round((Date.now()-t0)/1000);
+    msg(`💾 Guardando ${n} de ${todo.length}\n${cur.name}\n${mb(cur.size)} · ${fase} · ${s} s\n\nNo cierres la app ni bloquees el móvil`,0,'busy');
+  };
+  const iv=setInterval(pinta,500);
+
+  for(const f of todo){
+    n++;cur=f;t0=Date.now();fase='copiando';pinta();
+    const id=f.name+'|'+f.size;let it=byId.get(id);
+    try{
       await putBlob(id,f);
       if(it){it.hasVideo=true;rec++}
-      else{it={id,name:f.name.replace(/\.[^.]+$/,''),thumb:await makeThumb(f),state:'no',added:Date.now(),hasVideo:true};items.push(it);nuevos++}
+      else{
+        fase='creando miniatura';pinta();
+        it={id,name:f.name.replace(/\.[^.]+$/,''),thumb:await makeThumb(f),state:'no',added:Date.now(),hasVideo:true};
+        items.push(it);byId.set(id,it);nuevos++;
+      }
       await put(it);
+      render();
+    }catch(err){
+      console.error(err);
+      try{await req(tx('readwrite','blobs').delete(id))}catch(_){}
+      if(err&&err.name==='QuotaExceededError'){sinEspacio=true;fallos.push(f.name);break}
+      fallos.push(f.name);
     }
-  }catch(err){
-    console.error(err);render();
-    msg('Falló al guardar: '+(err&&err.name||'error')+' – '+(err&&err.message||'sin detalle')+(err&&err.name==='QuotaExceededError'?' (no cabe más en el almacenamiento)':''),0);return;
   }
+  clearInterval(iv);cur=null;busy=false;
+  try{lock&&lock.release()}catch(_){}
   render();
-  let t=`Añadidos ${nuevos} nuevos`+(rec?`, ${rec} reconectados`:'')+`, ${files.length-todo.length} ya estaban`;
-  try{const e=await navigator.storage.estimate();t+=` · Usado: ${(e.usage/1e9).toFixed(2)} GB`}catch(_){}
-  msg(t,4500);
+
+  let uso='';
+  try{const st=await navigator.storage.estimate();uso=` · Usado: ${(st.usage/1e9).toFixed(2)} GB`}catch(_){}
+
+  if(sinEspacio){
+    msg(`⚠️ No cabe más en el almacenamiento.\nGuardados: ${nuevos+rec}. Falló: ${fallos[0]}.\nLibera espacio o quita videos que ya te sepas.${uso}`,0,'err');
+  }else if(fallos.length){
+    msg(`⚠️ Guardados ${nuevos+rec}, pero fallaron ${fallos.length}:\n${fallos.slice(0,3).join('\n')}${fallos.length>3?'\n…':''}\n\nGuardé pocos videos por vez: prueba a añadir esos de 1 en 1.${uso}`,0,'err');
+  }else{
+    let t=`✅ Listo: ${nuevos} nuevos`+(rec?`, ${rec} reconectados`:'')+(ya?`, ${ya} ya estaban`:'')+uso;
+    msg(t,6000,'ok');
+  }
 };
 
 /* ---------- Exportar / Importar ---------- */
@@ -215,7 +283,7 @@ $('#fi').onchange=async e=>{
     for(const it of data){if(it.id&&it.name&&['no','medias','si'].includes(it.state)){
       it.hasVideo=!!(have.get(it.id)&&have.get(it.id).hasVideo);await put(it)}}
     items=await getAll();render();msg('Copia importada');
-  }catch(err){msg('Archivo no válido')}
+  }catch(err){msg('Archivo no válido',3000,'err')}
 };
 
 /* ---------- Tabs y búsqueda ---------- */
@@ -231,7 +299,7 @@ $('#q').oninput=e=>{query=e.target.value;render()};
 })();
 
 (async()=>{
-  try{db=await open();items=await getAll();}catch(e){msg('No se pudo abrir el almacenamiento: '+(e&&e.name||'')+' '+(e&&e.message||''),0)}
+  try{db=await open();items=await getAll();}catch(e){msg('No se pudo abrir el almacenamiento: '+(e&&e.name||'')+' '+(e&&e.message||''),0,'err')}
   render();
   try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist()}catch(e){}
   if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
