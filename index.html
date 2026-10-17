@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Baile">
+<meta name="theme-color" content="#111111">
+<title>Baile</title>
+<link rel="apple-touch-icon" id="icon" href="">
+<style>
+  :root{--bg:#111;--card:#1c1c1e;--txt:#f2f2f7;--mut:#8e8e93;--no:#ff453a;--med:#ffd60a;--si:#30d158;--line:#2c2c2e}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;background:var(--bg);color:var(--txt);font:16px -apple-system,system-ui,sans-serif}
+  body{padding:env(safe-area-inset-top) 0 calc(env(safe-area-inset-bottom) + 70px)}
+  header{position:sticky;top:0;z-index:5;background:var(--bg);padding:10px 12px 0;border-bottom:1px solid var(--line)}
+  .row{display:flex;gap:8px;align-items:center}
+  input[type=search]{flex:1;min-width:0;background:var(--card);border:0;border-radius:10px;color:var(--txt);padding:10px 12px;font-size:16px}
+  button{font:inherit;color:var(--txt);background:var(--card);border:0;border-radius:10px;padding:10px 12px}
+  button.primary{background:#0a84ff}
+  .tabs{display:flex;margin-top:8px}
+  .tab{flex:1;text-align:center;padding:10px 4px;border-bottom:3px solid transparent;color:var(--mut);font-size:14px;background:none;border-radius:0}
+  .tab b{display:block;font-size:20px;color:var(--txt)}
+  .tab.active[data-s=no]{border-color:var(--no);color:var(--txt)}
+  .tab.active[data-s=medias]{border-color:var(--med);color:var(--txt)}
+  .tab.active[data-s=si]{border-color:var(--si);color:var(--txt)}
+  main{padding:12px;display:grid;gap:10px}
+  .item{background:var(--card);border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
+  .top{display:flex;gap:10px;padding:10px;align-items:center}
+  .thumb{width:84px;height:84px;border-radius:10px;background:#2c2c2e center/cover no-repeat;flex:none}
+  .name{flex:1;min-width:0;word-break:break-word;font-size:15px;line-height:1.25}
+  .del{background:none;color:var(--mut);padding:6px 8px;font-size:18px}
+  .btns{display:flex;border-top:1px solid var(--line)}
+  .btns button{flex:1;border-radius:0;background:none;font-size:14px;padding:13px 2px;color:var(--mut)}
+  .btns button.on[data-s=no]{color:#000;background:var(--no)}
+  .btns button.on[data-s=medias]{color:#000;background:var(--med)}
+  .btns button.on[data-s=si]{color:#000;background:var(--si)}
+  .empty{color:var(--mut);text-align:center;padding:40px 20px;line-height:1.5}
+  footer{position:fixed;left:0;right:0;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding:8px 12px calc(env(safe-area-inset-bottom) + 8px);display:flex;gap:8px}
+  footer button{flex:1;font-size:14px}
+  #msg{position:fixed;left:12px;right:12px;bottom:calc(env(safe-area-inset-bottom) + 70px);background:#3a3a3c;padding:10px 12px;border-radius:10px;display:none;z-index:9;text-align:center}
+  #player{display:none;position:fixed;inset:0;background:#000;z-index:20;flex-direction:column}
+  .phead{display:flex;gap:10px;align-items:center;justify-content:space-between;padding:calc(env(safe-area-inset-top) + 8px) 12px 8px}
+  .phead span{flex:1;min-width:0;font-size:15px;word-break:break-word}
+  #pv{flex:1;min-height:0;width:100%;background:#000}
+  .thumb{position:relative}
+  .thumb::after{content:"▶";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:26px;color:#fff;text-shadow:0 0 6px #000}
+  .thumb.novid::after{content:"⚠";color:#ffd60a}
+  @media(min-width:700px){main{grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}}
+</style>
+</head>
+<body>
+<header>
+  <div class="row"><input type="search" id="q" placeholder="Buscar paso…"></div>
+  <div class="tabs">
+    <button class="tab active" data-s="no"><b id="c-no">0</b>No me lo sé</button>
+    <button class="tab" data-s="medias"><b id="c-medias">0</b>Estoy en ello</button>
+    <button class="tab" data-s="si"><b id="c-si">0</b>Me lo sé</button>
+  </div>
+</header>
+<main id="list"></main>
+<div id="msg"></div>
+<div id="player">
+  <div class="phead"><span id="ptitle"></span><button onclick="closePlayer()">Cerrar</button></div>
+  <video id="pv" controls playsinline></video>
+</div>
+<footer>
+  <button class="primary" id="add">+ Añadir videos</button>
+  <button id="exp">Exportar</button>
+  <button id="imp">Importar</button>
+</footer>
+<input type="file" id="fv" accept="video/*" multiple hidden>
+<input type="file" id="fi" accept="application/json,.json" hidden>
+
+<script>
+const STATES=[['no','No lo sé'],['medias','En ello'],['si','Lo sé']];
+let db, items=[], tab='no', query='';
+
+/* ---------- IndexedDB ---------- */
+const open=()=>new Promise((ok,ko)=>{const r=indexedDB.open('baile',2);
+  r.onupgradeneeded=()=>{const d=r.result;
+    if(!d.objectStoreNames.contains('videos'))d.createObjectStore('videos',{keyPath:'id'});
+    if(!d.objectStoreNames.contains('blobs'))d.createObjectStore('blobs');};
+  r.onblocked=()=>msg('Hay otra pestaña de esta app abierta. Ciérrala (o cierra todas las pestañas de la app) y recarga.',0);
+  r.onsuccess=()=>{r.result.onversionchange=()=>{r.result.close();location.reload()};ok(r.result)};
+  r.onerror=()=>ko(r.error)});
+const tx=(mode,store='videos')=>db.transaction(store,mode).objectStore(store);
+const req=r=>new Promise((ok,ko)=>{r.onsuccess=()=>ok(r.result);r.onerror=()=>ko(r.error)});
+const getAll=()=>req(tx('readonly').getAll());
+const put=o=>req(tx('readwrite').put(o));
+const del=async id=>{await req(tx('readwrite').delete(id));await req(tx('readwrite','blobs').delete(id))};
+const putBlob=(id,f)=>req(tx('readwrite','blobs').put(f,id));
+const getBlob=id=>req(tx('readonly','blobs').get(id));
+
+/* ---------- Reproductor ---------- */
+let curUrl=null;
+async function play(it){
+  let b;try{b=await getBlob(it.id)}catch(e){}
+  if(!b){msg('Este video no está guardado en la app. Vuelve a añadirlo con "+ Añadir videos".',4000);return}
+  curUrl=URL.createObjectURL(b);
+  const v=$('#pv');v.src=curUrl;$('#ptitle').textContent=it.name;$('#player').style.display='flex';
+  v.play().catch(()=>{});
+}
+function closePlayer(){
+  const v=$('#pv');v.pause();v.removeAttribute('src');v.load();
+  if(curUrl)URL.revokeObjectURL(curUrl);curUrl=null;$('#player').style.display='none';
+}
+
+/* ---------- UI ---------- */
+const $=s=>document.querySelector(s);
+function msg(t,ms=2500){const m=$('#msg');m.textContent=t;m.style.display='block';clearTimeout(msg.t);if(ms)msg.t=setTimeout(()=>m.style.display='none',ms)}
+const collator=new Intl.Collator('es',{numeric:true,sensitivity:'base'});
+
+function render(){
+  for(const [s] of STATES) $('#c-'+s).textContent=items.filter(i=>i.state===s).length;
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.s===tab));
+  const q=query.toLowerCase();
+  const shown=items.filter(i=>i.state===tab&&i.name.toLowerCase().includes(q)).sort((a,b)=>collator.compare(a.name,b.name));
+  const list=$('#list');list.textContent='';
+  if(!shown.length){
+    const d=document.createElement('div');d.className='empty';
+    d.textContent=items.length?'No hay videos en esta lista.':'Aún no hay videos. Pulsa "Añadir videos" y selecciona los de tu carpeta baile.';
+    list.appendChild(d);return;
+  }
+  for(const it of shown){
+    const el=document.createElement('div');el.className='item';
+    const top=document.createElement('div');top.className='top';
+    const th=document.createElement('div');th.className='thumb';
+    if(it.thumb)th.style.backgroundImage=`url(${it.thumb})`;
+    if(!it.hasVideo)th.classList.add('novid');
+    th.onclick=()=>play(it);
+    const nm=document.createElement('div');nm.className='name';nm.textContent=it.name;
+    nm.onclick=()=>rename(it);
+    const x=document.createElement('button');x.className='del';x.textContent='✕';
+    x.onclick=async()=>{if(confirm('¿Quitar de la lista?\n'+it.name)){await del(it.id);items=items.filter(i=>i.id!==it.id);render()}};
+    top.append(th,nm,x);
+    const b=document.createElement('div');b.className='btns';
+    for(const [s,l] of STATES){
+      const btn=document.createElement('button');btn.dataset.s=s;btn.textContent=l;
+      if(it.state===s)btn.classList.add('on');
+      btn.onclick=async()=>{if(it.state===s)return;it.state=s;await put(it);render()};
+      b.appendChild(btn);
+    }
+    el.append(top,b);list.appendChild(el);
+  }
+}
+async function rename(it){
+  const n=prompt('Nombre del paso:',it.name);
+  if(n&&n.trim()){it.name=n.trim();await put(it);render()}
+}
+
+/* ---------- Miniatura ---------- */
+function makeThumb(file){return new Promise(res=>{
+  const url=URL.createObjectURL(file),v=document.createElement('video');
+  v.muted=true;v.playsInline=true;v.preload='metadata';v.src=url;
+  let done=false;
+  const end=d=>{if(done)return;done=true;clearTimeout(t);URL.revokeObjectURL(url);v.removeAttribute('src');v.load();res(d)};
+  const t=setTimeout(()=>end(''),8000);
+  v.addEventListener('loadedmetadata',()=>{v.currentTime=Math.min(1,(v.duration||2)/2)});
+  v.addEventListener('seeked',()=>{try{
+    const w=200,h=Math.round(w*(v.videoHeight/v.videoWidth))||112,c=document.createElement('canvas');
+    c.width=w;c.height=h;c.getContext('2d').drawImage(v,0,0,w,h);end(c.toDataURL('image/jpeg',.6));
+  }catch(e){end('')}});
+  v.addEventListener('error',()=>end(''));
+})}
+
+/* ---------- Añadir videos ---------- */
+$('#add').onclick=()=>{
+  if(!db){msg('El almacenamiento no está listo. Cierra otras pestañas de la app y recarga la página.',5000);return}
+  $('#fv').click();
+};
+$('#fv').onchange=async e=>{
+  const files=[...e.target.files];e.target.value='';
+  const byId=new Map(items.map(i=>[i.id,i]));
+  const todo=files.filter(f=>{const it=byId.get(f.name+'|'+f.size);return !it||!it.hasVideo});
+  let n=0,nuevos=0,rec=0;
+  try{
+    for(const f of todo){
+      msg(`Guardando ${++n}/${todo.length}…`,0);
+      const id=f.name+'|'+f.size;let it=byId.get(id);
+      await putBlob(id,f);
+      if(it){it.hasVideo=true;rec++}
+      else{it={id,name:f.name.replace(/\.[^.]+$/,''),thumb:await makeThumb(f),state:'no',added:Date.now(),hasVideo:true};items.push(it);nuevos++}
+      await put(it);
+    }
+  }catch(err){
+    console.error(err);render();
+    msg('Falló al guardar: '+(err&&err.name||'error')+' – '+(err&&err.message||'sin detalle')+(err&&err.name==='QuotaExceededError'?' (no cabe más en el almacenamiento)':''),0);return;
+  }
+  render();
+  let t=`Añadidos ${nuevos} nuevos`+(rec?`, ${rec} reconectados`:'')+`, ${files.length-todo.length} ya estaban`;
+  try{const e=await navigator.storage.estimate();t+=` · Usado: ${(e.usage/1e9).toFixed(2)} GB`}catch(_){}
+  msg(t,4500);
+};
+
+/* ---------- Exportar / Importar ---------- */
+$('#exp').onclick=async()=>{
+  const blob=new Blob([JSON.stringify(items)],{type:'application/json'});
+  const file=new File([blob],'baile-copia.json',{type:'application/json'});
+  try{
+    if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file]});return}
+  }catch(e){if(e.name==='AbortError')return}
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='baile-copia.json';a.click();
+};
+$('#imp').onclick=()=>$('#fi').click();
+$('#fi').onchange=async e=>{
+  const f=e.target.files[0];e.target.value='';if(!f)return;
+  try{
+    const data=JSON.parse(await f.text());
+    if(!Array.isArray(data))throw 0;
+    if(!confirm(`Importar ${data.length} videos? Se sustituirán los estados de los que ya existan.`))return;
+    const have=new Map(items.map(i=>[i.id,i]));
+    for(const it of data){if(it.id&&it.name&&['no','medias','si'].includes(it.state)){
+      it.hasVideo=!!(have.get(it.id)&&have.get(it.id).hasVideo);await put(it)}}
+    items=await getAll();render();msg('Copia importada');
+  }catch(err){msg('Archivo no válido')}
+};
+
+/* ---------- Tabs y búsqueda ---------- */
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{tab=t.dataset.s;render();scrollTo(0,0)});
+$('#q').oninput=e=>{query=e.target.value;render()};
+
+/* ---------- Icono, manifest, offline ---------- */
+(function(){
+  const c=document.createElement('canvas');c.width=c.height=180;const x=c.getContext('2d');
+  x.fillStyle='#111';x.fillRect(0,0,180,180);x.fillStyle='#30d158';x.beginPath();x.arc(90,90,56,0,7);x.fill();
+  x.fillStyle='#111';x.font='bold 64px sans-serif';x.textAlign='center';x.textBaseline='middle';x.fillText('♪',90,94);
+  $('#icon').href=c.toDataURL('image/png');
+})();
+
+(async()=>{
+  try{db=await open();items=await getAll();}catch(e){msg('No se pudo abrir el almacenamiento: '+(e&&e.name||'')+' '+(e&&e.message||''),0)}
+  render();
+  try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist()}catch(e){}
+  if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+})();
+</script>
+</body>
+</html>
